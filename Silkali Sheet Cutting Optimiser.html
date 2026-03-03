@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Silkali Sheet Cutting Optimiser</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+<style>
+
+body{
+    font-family: Arial;
+    background:#fafafa;
+    text-align:center;
+}
+
+.container{
+    display:flex;
+    justify-content:center;
+    gap:20px;
+}
+
+.panel{
+    width:320px;
+    background:white;
+    padding:15px;
+    border-radius:10px;
+    box-shadow:0 0 8px rgba(0,0,0,0.1);
+}
+
+#boardContainer{
+    display:flex;
+    flex-wrap:wrap;
+    justify-content:center;
+    max-width:1200px;
+    margin:auto;
+}
+
+.board{
+    position:relative;
+    width:400px;
+    height:200px;
+    border:2px solid black;
+    margin:10px;
+    background:white;
+}
+
+.piece{
+    position:absolute;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:10px;
+    font-weight:bold;
+    border:1px solid black;
+}
+
+.offcut-item{
+    padding:6px;
+    margin:4px;
+    background:#eee;
+    font-size:12px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+}
+
+button,input,select,textarea{
+    padding:6px;
+    margin:4px;
+}
+
+</style>
+</head>
+
+<body>
+
+<h2>Silkali Sheet Cutting Optimiser</h2>
+
+<div class="container">
+
+<div class="panel">
+
+<h3>Workflow</h3>
+
+<select id="presetSize"></select>
+
+<br>
+
+Quantity
+<input type="number" id="qty" value="1" min="1">
+
+<br>
+
+Rotation
+<input type="checkbox" id="rotate">
+
+<br>
+
+<button onclick="addCut()">✔ Add Cut To Priority List</button>
+
+<h4>Cut Priority List</h4>
+<div id="priorityList"></div>
+
+<hr>
+
+<h4>Order Names</h4>
+
+<textarea id="orderNames"
+rows="4"
+style="width:90%"
+placeholder="Enter order names, one per line"></textarea>
+
+<hr>
+
+Boards
+<input type="number" id="boardCount" value="1" min="1">
+
+<br>
+
+<button onclick="optimise()">🚀 Optimise Layout</button>
+
+<br>
+
+<button onclick="exportLayoutJPG()">📷 Export Layout Image</button>
+
+<button onclick="resetAll()">🔄 Reset Planner</button>
+
+</div>
+
+<div>
+
+<h3>Board Layout</h3>
+<div id="boardContainer"></div>
+
+<h3>Offcut Inventory Pool</h3>
+<div id="offcutViewer"></div>
+
+<h3>Recommended Cutting Order</h3>
+<div id="recommendationPanel"></div>
+
+</div>
+
+</div>
+
+<div id="results"></div>
+
+<script>
+
+/* Presets */
+
+const presetSizes=[
+"0.82,0.82","1,1","1.64,0.82","1.64,1.64",
+"2,1","2,2",
+"3,1","3,2","3,3",
+"4,1","4,2","4,3","4,4",
+"5,1","5,2","5,3","5,4",
+"6,1","6,2","6,3","6,4",
+"8,1","8,2","8,3","8,4"
+];
+
+const dropdown=document.getElementById("presetSize");
+
+presetSizes.forEach(s=>{
+    let opt=document.createElement("option");
+    opt.value=s;
+    opt.innerText=s.replace(","," x ");
+    dropdown.appendChild(opt);
+});
+
+/* State */
+
+const boardW=8;
+const boardH=4;
+const scale=50;
+
+let cuts=[];
+let placements=[];
+let stock=[];
+
+const colours=[
+"#ff9999","#99ccff","#99ff99",
+"#ffcc99","#cc99ff","#ffff99"
+];
+
+/* Cut Queue */
+
+function addCut(){
+
+    let size=presetSize.value;
+    if(!size) return;
+
+    let [w,h]=size.split(",").map(Number);
+
+    cuts.push({
+        w,h,
+        qty:parseInt(qty.value),
+        rotate:rotate.checked,
+        color:colours[cuts.length % colours.length]
+    });
+
+    renderPriorityList();
+}
+
+/* Priority Rendering */
+
+function renderPriorityList(){
+
+    let list=document.getElementById("priorityList");
+    list.innerHTML="";
+
+    cuts.forEach((c,index)=>{
+
+        let div=document.createElement("div");
+        div.className="offcut-item";
+
+        div.innerHTML=
+        `${c.w}x${c.h} | Qty:${c.qty}
+        <span style="color:red;cursor:pointer"
+        onclick="removeCut(${index})">✖</span>`;
+
+        list.appendChild(div);
+    });
+}
+
+function removeCut(index){
+    cuts.splice(index,1);
+    renderPriorityList();
+}
+
+/* Optimiser */
+
+function optimise(){
+
+    placements=[];
+    boardContainer.innerHTML="";
+    offcutViewer.innerHTML="";
+    recommendationPanel.innerHTML="";
+
+    let boards=parseInt(boardCount.value);
+
+    stock=[];
+
+    for(let i=0;i<boards;i++){
+        stock.push({
+            x:0,
+            y:0,
+            w:boardW,
+            h:boardH,
+            board:i
+        });
+    }
+
+    let usedArea=0;
+
+    cuts.sort((a,b)=>(b.w*b.h)-(a.w*a.h));
+
+    let recommendationList=[];
+
+    for(let cut of cuts){
+
+        let remainingQty=cut.qty;
+
+        while(remainingQty>0){
+
+            let bestIndex=-1;
+            let bestOri=null;
+            let bestScore=Infinity;
+
+            for(let i=0;i<stock.length;i++){
+
+                let rect=stock[i];
+
+                let orientations=[
+                    {w:cut.w,h:cut.h},
+                    ...(cut.rotate ? [{w:cut.h,h:cut.w}] : [])
+                ];
+
+                for(let ori of orientations){
+
+                    if(ori.w>rect.w || ori.h>rect.h) continue;
+
+                    let waste=
+                        (rect.w-ori.w)*(rect.h-ori.h)+
+                        Math.hypot(rect.x,rect.y)*0.01;
+
+                    if(waste<bestScore){
+                        bestScore=waste;
+                        bestIndex=i;
+                        bestOri={w:ori.w,h:ori.h};
+                    }
+                }
+            }
+
+            if(bestIndex===-1) break;
+
+            let rect=stock[bestIndex];
+
+            placements.push({
+                x:rect.x,
+                y:rect.y,
+                w:bestOri.w,
+                h:bestOri.h,
+                color:cut.color,
+                board:rect.board
+            });
+
+            usedArea+=bestOri.w*bestOri.h;
+
+            splitRect(rect,bestOri.w,bestOri.h,rect.board);
+
+            stock.splice(bestIndex,1);
+
+            remainingQty--;
+        }
+
+        if(cut.qty>0){
+            recommendationList.push({
+                size:`${cut.w}x${cut.h}`,
+                qty:cut.qty,
+                area:cut.w*cut.h
+            });
+        }
+    }
+
+    drawBoards(boards);
+
+    let totalArea=boards*boardW*boardH;
+    let efficiency=((usedArea/totalArea)*100).toFixed(1);
+
+    results.innerHTML="Material Efficiency: "+efficiency+"%";
+
+    renderOffcuts();
+
+    /* Recommended Cutting Order Display */
+
+    recommendationList.sort((a,b)=>b.area-a.area);
+
+    let panel=document.getElementById("recommendationPanel");
+
+    panel.innerHTML="<b>Recommended Cutting Order:</b><br>";
+
+    recommendationList.forEach((r,i)=>{
+        panel.innerHTML+=
+        `${i+1}. Cut ${r.size} | Qty: ${r.qty}<br>`;
+    });
+}
+
+/* Geometry Split */
+
+function splitRect(rect,w,h,board){
+
+    let right={x:rect.x+w,y:rect.y,w:rect.w-w,h:h,board};
+    let bottom={x:rect.x,y:rect.y+h,w:rect.w,h:rect.h-h,board};
+
+    if(right.w>0 && right.h>0) stock.push(right);
+    if(bottom.w>0 && bottom.h>0) stock.push(bottom);
+}
+
+/* Rendering */
+
+function drawBoards(count){
+
+    let boardGroups={};
+
+    placements.forEach(p=>{
+        if(!boardGroups[p.board]) boardGroups[p.board]=[];
+        boardGroups[p.board].push(p);
+    });
+
+    boardContainer.innerHTML="";
+
+    for(let b=0;b<count;b++){
+
+        let div=document.createElement("div");
+        div.className="board";
+        div.id="board"+b;
+
+        boardContainer.appendChild(div);
+
+        let usedRects=boardGroups[b] || [];
+
+        usedRects.forEach(p=>{
+
+            let piece=document.createElement("div");
+            piece.className="piece";
+
+            piece.style.left=(p.x*scale)+"px";
+            piece.style.top=(p.y*scale)+"px";
+            piece.style.width=(p.w*scale)+"px";
+            piece.style.height=(p.h*scale)+"px";
+            piece.style.background=p.color;
+
+            piece.innerText=p.w+"x"+p.h;
+
+            div.appendChild(piece);
+        });
+    }
+}
+
+/* Offcuts */
+
+function renderOffcuts(){
+
+    offcutViewer.innerHTML="";
+
+    stock.forEach(o=>{
+        if(o.w<=0 || o.h<=0) return;
+
+        let div=document.createElement("div");
+        div.className="offcut-item";
+        div.innerText=`Offcut ${o.w.toFixed(2)} x ${o.h.toFixed(2)}`;
+        offcutViewer.appendChild(div);
+    });
+}
+
+/* Export */
+
+async function exportLayoutJPG(){
+
+    let canvas=await html2canvas(
+        document.getElementById("boardContainer"),
+        {scale:2}
+    );
+
+    let link=document.createElement("a");
+    link.download="layout.jpg";
+    link.href=canvas.toDataURL("image/jpeg",0.9);
+    link.click();
+}
+
+/* Reset */
+
+function resetAll(){
+
+    cuts=[];
+    placements=[];
+    stock=[];
+
+    boardContainer.innerHTML="";
+    priorityList.innerHTML="";
+    offcutViewer.innerHTML="";
+    results.innerHTML="";
+    recommendationPanel.innerHTML="";
+}
+
+</script>
+
+</body>
+</html>
