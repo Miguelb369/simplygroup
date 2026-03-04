@@ -142,11 +142,26 @@
     <button onclick="optimise()">Optimise layout</button>
     <button onclick="exportLayoutJPG()">Export layout image</button>
 
-    <div class="btnrow">
-      <button class="smallbtn" onclick="saveState()">Save</button>
-      <button class="smallbtn" onclick="loadState()">Load</button>
-      <button class="smallbtn" onclick="resetAll()">Reset</button>
-    </div>
+    <div style="margin-top:10px;">
+  <label>Save name</label>
+  <input type="text" id="saveName" placeholder="e.g. Job 1234 - MDF" />
+
+  <div class="btnrow">
+    <button class="smallbtn" onclick="saveAs()">Save as</button>
+    <button class="smallbtn" onclick="overwriteSelected()">Overwrite</button>
+    <button class="smallbtn" onclick="resetAll()">Reset</button>
+  </div>
+
+  <label>Saved plans</label>
+  <select id="saveRoster"></select>
+
+  <div class="btnrow">
+    <button class="smallbtn" onclick="loadSelected()">Load</button>
+    <button class="smallbtn" onclick="deleteSelected()">Delete</button>
+  </div>
+
+  <div id="saveStatus" class="muted" style="margin-top:6px;"></div>
+</div>
 
     <div class="muted">
       Drag pieces to adjust. Double-click a piece to rotate (if allowed).
@@ -721,11 +736,59 @@ async function exportLayoutJPG() {
   link.click();
 }
 
-/* PERSISTENCE */
-const STORAGE_KEY = "silkali_cut_planner_state_v3";
+/* PERSISTENCE (multi-save roster) */
+const STORAGE_PREFIX = "silkali_plan_v1:";
+const STORAGE_INDEX  = "silkali_plan_index_v1";
 
-function saveState() {
-  const state = {
+const saveRosterEl = document.getElementById("saveRoster");
+const saveStatusEl = document.getElementById("saveStatus");
+
+function nowStamp() {
+  const d = new Date();
+  return d.toLocaleString();
+}
+
+function getIndex() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_INDEX) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function setIndex(idx) {
+  localStorage.setItem(STORAGE_INDEX, JSON.stringify(idx));
+}
+
+function updateRosterUI(selectId = null) {
+  const idx = getIndex().sort((a,b)=>b.ts - a.ts); // newest first
+  saveRosterEl.innerHTML = "";
+
+  if (idx.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No saved plans";
+    saveRosterEl.appendChild(opt);
+    saveRosterEl.disabled = true;
+    return;
+  }
+
+  saveRosterEl.disabled = false;
+
+  idx.forEach(item => {
+    const opt = document.createElement("option");
+    opt.value = item.id;
+    opt.textContent = `${item.name} — ${item.when}`;
+    saveRosterEl.appendChild(opt);
+  });
+
+  if (selectId) {
+    saveRosterEl.value = selectId;
+  }
+}
+
+function buildStatePayload() {
+  return {
     cuts,
     placements,
     stock,
@@ -735,41 +798,140 @@ function saveState() {
     snapMm: document.getElementById("snapMm").value,
     layoutIsCurrent
   };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
-function loadState() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) return;
+function applyStatePayload(state) {
+  cuts = Array.isArray(state.cuts) ? state.cuts : [];
+  placements = Array.isArray(state.placements) ? state.placements : [];
+  stock = Array.isArray(state.stock) ? state.stock : [];
+
+  document.getElementById("boardCount").value = state.boardCount ?? "1";
+  document.getElementById("kerfMm").value = state.kerfMm ?? "6";
+  document.getElementById("gapMm").value = state.gapMm ?? "0";
+  document.getElementById("snapMm").value = state.snapMm ?? "1";
+  layoutIsCurrent = !!state.layoutIsCurrent;
+
+  renderPriorityList();
+  drawBoards(parseInt(document.getElementById("boardCount").value, 10));
+  renderOffcuts();
+  renderRecommendation();
+
+  if (!layoutIsCurrent && cuts.length > 0) markLayoutOutdated();
+}
+
+function setStatus(msg) {
+  if (saveStatusEl) saveStatusEl.textContent = msg;
+}
+
+/* Save new entry */
+function saveAs() {
+  const name = (document.getElementById("saveName").value || "").trim();
+  if (!name) {
+    alert("Please enter a save name.");
+    return;
+  }
 
   try {
-    const state = JSON.parse(raw);
+    const id = crypto?.randomUUID ? crypto.randomUUID() : String(Date.now());
+    const payload = buildStatePayload();
+    localStorage.setItem(STORAGE_PREFIX + id, JSON.stringify(payload));
 
-    cuts = Array.isArray(state.cuts) ? state.cuts : [];
-    placements = Array.isArray(state.placements) ? state.placements : [];
-    stock = Array.isArray(state.stock) ? state.stock : [];
+    const idx = getIndex();
+    idx.push({ id, name, ts: Date.now(), when: nowStamp() });
+    setIndex(idx);
 
-    document.getElementById("boardCount").value = state.boardCount ?? "1";
-    document.getElementById("kerfMm").value = state.kerfMm ?? "6";
-    document.getElementById("gapMm").value = state.gapMm ?? "0";
-    document.getElementById("snapMm").value = state.snapMm ?? "1";
-    layoutIsCurrent = !!state.layoutIsCurrent;
+    updateRosterUI(id);
 
-    renderPriorityList();
-    drawBoards(parseInt(document.getElementById("boardCount").value, 10));
-    renderOffcuts();
-    renderRecommendation();
-
-    if (!layoutIsCurrent && cuts.length > 0) {
-      markLayoutOutdated();
-    }
-
+    setStatus(`Saved "${name}" (cuts: ${payload.cuts.length}, pieces: ${payload.placements.length}).`);
   } catch (e) {
     console.error(e);
+    alert("Save failed. Browser storage may be blocked (often happens on file:// or private mode).");
   }
 }
 
-/* RESET */
+/* Overwrite selected */
+function overwriteSelected() {
+  const id = saveRosterEl.value;
+  if (!id) return;
+
+  const idx = getIndex();
+  const entry = idx.find(x => x.id === id);
+  if (!entry) return;
+
+  try {
+    const payload = buildStatePayload();
+    localStorage.setItem(STORAGE_PREFIX + id, JSON.stringify(payload));
+
+    entry.ts = Date.now();
+    entry.when = nowStamp();
+
+    setIndex(idx);
+    updateRosterUI(id);
+
+    setStatus(`Overwrote "${entry.name}" (cuts: ${payload.cuts.length}, pieces: ${payload.placements.length}).`);
+  } catch (e) {
+    console.error(e);
+    alert("Overwrite failed. Browser storage may be blocked.");
+  }
+}
+
+/* Load selected */
+function loadSelected() {
+  const id = saveRosterEl.value;
+  if (!id) return;
+
+  try {
+    const raw = localStorage.getItem(STORAGE_PREFIX + id);
+    if (!raw) {
+      alert("That save slot is missing. It may have been cleared.");
+      return;
+    }
+
+    const state = JSON.parse(raw);
+    applyStatePayload(state);
+
+    const idx = getIndex();
+    const entry = idx.find(x => x.id === id);
+    setStatus(`Loaded "${entry ? entry.name : id}" (cuts: ${cuts.length}, pieces: ${placements.length}).`);
+  } catch (e) {
+    console.error(e);
+    alert("Load failed. Saved data may be corrupted or storage blocked.");
+  }
+}
+
+/* Delete selected */
+function deleteSelected() {
+  const id = saveRosterEl.value;
+  if (!id) return;
+
+  const idx = getIndex();
+  const entry = idx.find(x => x.id === id);
+
+  if (!confirm(`Delete "${entry ? entry.name : id}"?`)) return;
+
+  try {
+    localStorage.removeItem(STORAGE_PREFIX + id);
+    const next = idx.filter(x => x.id !== id);
+    setIndex(next);
+    updateRosterUI();
+
+    setStatus(`Deleted "${entry ? entry.name : id}".`);
+  } catch (e) {
+    console.error(e);
+    alert("Delete failed.");
+  }
+}
+
+/* Replace old single-save calls with safe no-ops or keep them if used elsewhere */
+function saveState() {
+  // Optional: autosave into a hidden slot later if you want.
+}
+function loadState() {
+  // Optional: keep empty; roster controls handle loading.
+}
+
+/* Initialise roster on load */
+updateRosterUI();/* RESET */
 function resetAll() {
   cuts = [];
   placements = [];
@@ -795,5 +957,4 @@ renderPriorityList();
 </script>
 
 </body>
-
 </html>
