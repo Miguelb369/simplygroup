@@ -180,7 +180,7 @@
     </div>
     <div id="offcutViewer"></div>
 
-    <h3>Recommended order</h3>
+    <h3>---------</h3>
     <div id="recommendationPanel"></div>
 
     <div id="results" style="margin-top:10px; font-weight:bold;"></div>
@@ -197,20 +197,46 @@ const scale = 50;
 
 /* PRESETS */
 const presetSizes = [
-  "0.82,0.82","1,1","1.64,0.82","1.64,1.64",
-  "2,1","2,2",
-  "3,1","3,2","3,3",
-  "4,1","4,2","4,3","4,4",
-  "5,1","5,2","5,3","5,4",
-  "6,1","6,2","6,3","6,4",
-  "8,1","8,2","8,3","8,4"
+  { ft:"0.82,0.82", mm:"250 x 250" },
+  { ft:"1,1", mm:"305 x 305" },
+  { ft:"1.64,0.82", mm:"500 x 250" },
+  { ft:"1.64,1.64", mm:"500 x 500" },
+  { ft:"2,1", mm:"610 x 305" },
+  { ft:"2,2", mm:"610 x 610" },
+  { ft:"3.28,0.82", mm:"1000 x 250" },
+  { ft:"3.28,1.64", mm:"1000 x 500" },
+  { ft:"3,1", mm:"915 x 305" },
+  { ft:"3,2", mm:"915 x 610" },
+  { ft:"3,3", mm:"915 x 915" },
+  { ft:"4,1", mm:"1220 x 305" },
+  { ft:"4,2", mm:"1220 x 610" },
+  { ft:"4,3", mm:"1220 x 915" },
+  { ft:"4,4", mm:"1220 x 1220" },
+  { ft:"5,1", mm:"1525 x 305" },
+  { ft:"5,2", mm:"1525 x 610" },
+  { ft:"5,3", mm:"1525 x 915" },
+  { ft:"5,4", mm:"1525 x 1220" },
+  { ft:"6,1", mm:"1830 x 305" },
+  { ft:"6,2", mm:"1830 x 610" },
+  { ft:"6,3", mm:"1830 x 915" },
+  { ft:"6,4", mm:"1830 x 1220" },
+  { ft:"6.56,1.31", mm:"2000 x 400" },
+  { ft:"6.56,1.64", mm:"2000 x 500" },
+  { ft:"6.56,1.97", mm:"2000 x 600" },
+  { ft:"8,1", mm:"2440 x 305" },
+  { ft:"8,2", mm:"2440 x 610" },
+  { ft:"8,3", mm:"2440 x 915" },
+  { ft:"8,4", mm:"2440 x 1220" }
 ];
 
 const dropdown = document.getElementById("presetSize");
-presetSizes.forEach(s => {
+presetSizes.forEach(p => {
   const opt = document.createElement("option");
-  opt.value = s;
-  opt.innerText = s.replace(",", " x ");
+  opt.value = p.ft;
+
+  const [fw, fh] = p.ft.split(",");
+  opt.innerText = `${fw} x ${fh} - ${p.mm}mm`;
+
   dropdown.appendChild(opt);
 });
 
@@ -286,16 +312,38 @@ function addCut() {
 
 function renderPriorityList() {
   priorityList.innerHTML = "";
+
   cuts.forEach((c, index) => {
     const div = document.createElement("div");
     div.className = "offcut-item";
-    div.innerHTML =
-      `${c.w}x${c.h} | Qty:${c.qty} | Rotate:${c.rotate ? "Yes" : "No"}
-      <span style="float:right;color:red;cursor:pointer" onclick="removeCut(${index})">✖</span>`;
+
+    div.innerHTML = `
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+        <div style="flex:1;">
+          <b>${c.w}x${c.h}</b>
+          <span class="muted"> | Rotate: ${c.rotate ? "Yes" : "No"}</span>
+        </div>
+
+        <div style="display:flex; align-items:center; gap:6px;">
+          <button class="smallbtn" style="width:auto;" onclick="adjustQty(${index}, -1)">−</button>
+
+          <input type="number"
+                 min="1"
+                 value="${c.qty}"
+                 style="width:70px; padding:4px;"
+                 onchange="setQty(${index}, this.value)"
+                 oninput="setQty(${index}, this.value)">
+
+          <button class="smallbtn" style="width:auto;" onclick="adjustQty(${index}, 1)">+</button>
+
+          <span style="color:red;cursor:pointer; font-weight:bold;" onclick="removeCut(${index})">✖</span>
+        </div>
+      </div>
+    `;
+
     priorityList.appendChild(div);
   });
 }
-
 function removeCut(i) {
   cuts.splice(i, 1);
   markLayoutOutdated();
@@ -375,25 +423,25 @@ function optimise() {
 
       usedArea += bestOri.w * bestOri.h;
 
-      // Split stock with kerf+gap spacing
-      const right = {
-        x: rect.x + bestOri.w + spacing,
-        y: rect.y,
-        w: rect.w - bestOri.w - spacing,
-        h: rect.h,
-        board: rect.board
-      };
+     // Split stock with kerf+gap spacing
+const right = {
+  x: rect.x + bestOri.w + spacing,
+  y: rect.y,
+  w: rect.w - bestOri.w - spacing,
+  h: rect.h,
+  board: rect.board
+};
 
-      const bottom = {
-        x: rect.x,
-        y: rect.y + bestOri.h + spacing,
-        w: rect.w,
-        h: rect.h - bestOri.h - spacing,
-        board: rect.board
-      };
+const bottom = {
+  x: rect.x,
+  y: rect.y + bestOri.h + spacing,
+  w: rect.w,
+  h: rect.h - bestOri.h - spacing,
+  board: rect.board
+};
 
-      if (right.w > 0 && right.h > 0) stock.push(right);
-      if (bottom.w > 0 && bottom.h > 0) stock.push(bottom);
+if (right.w > 0 && right.h > 0) stock.push(right);
+if (bottom.w > 0 && bottom.h > 0) stock.push(bottom);
 
       stock.splice(bestIndex, 1);
       remaining--;
@@ -808,7 +856,7 @@ function applyStatePayload(state) {
   document.getElementById("boardCount").value = state.boardCount ?? "1";
   document.getElementById("kerfMm").value = state.kerfMm ?? "6";
   document.getElementById("gapMm").value = state.gapMm ?? "0";
-  document.getElementById("snapMm").value = state.snapMm ?? "1";
+  document.getElementById("snapMm").value = state.snapMm ?? "0";
   layoutIsCurrent = !!state.layoutIsCurrent;
 
   renderPriorityList();
@@ -953,6 +1001,22 @@ function resetAll() {
 /* Auto-load on open */
 loadState();
 renderPriorityList();
+
+function adjustQty(index, delta) {
+  if (!cuts[index]) return;
+  cuts[index].qty = Math.max(1, (cuts[index].qty || 1) + delta);
+  markLayoutOutdated();
+  renderPriorityList();
+  saveState();
+}
+
+function setQty(index, value) {
+  if (!cuts[index]) return;
+  const n = parseInt(value, 10);
+  cuts[index].qty = Number.isFinite(n) ? Math.max(1, n) : 1;
+  markLayoutOutdated();
+  saveState(); // don't re-render on every keystroke; onchange already updates UI
+}
 
 </script>
 
